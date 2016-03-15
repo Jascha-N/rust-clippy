@@ -1,14 +1,15 @@
 use rustc::lint::*;
-use rustc::middle::const_eval::ConstVal::{Int, Uint};
 use rustc::middle::const_eval::EvalHint::ExprTypeChecked;
-use rustc::middle::const_eval::{eval_const_expr_partial, ConstVal};
+use rustc::middle::const_eval::eval_const_expr_partial;
 use rustc::middle::ty;
 use rustc_front::hir::*;
 use std::cmp::Ordering;
 use syntax::ast::LitKind;
 use syntax::codemap::Span;
+use utils::CompactConst;
 use utils::{COW_PATH, OPTION_PATH, RESULT_PATH};
-use utils::{match_type, snippet, span_note_and_lint, span_lint_and_then, in_external_macro, expr_block};
+use utils::{match_type, snippet, span_note_and_lint, span_lint_and_then,
+            in_external_macro, expr_block, to_compact_number};
 
 /// **What it does:** This lint checks for matches with a single arm where an `if let` will usually suffice.
 ///
@@ -334,7 +335,7 @@ fn check_match_ref_pats(cx: &LateContext, ex: &Expr, arms: &[Arm], source: Match
 }
 
 /// Get all arms that are unbounded PatRange-s.
-fn all_ranges(cx: &LateContext, arms: &[Arm]) -> Vec<SpannedRange<ConstVal>> {
+fn all_ranges(cx: &LateContext, arms: &[Arm]) -> Vec<SpannedRange<CompactConst>> {
     arms.iter()
         .filter_map(|arm| {
             if let Arm { ref pats, guard: None, .. } = *arm {
@@ -342,14 +343,16 @@ fn all_ranges(cx: &LateContext, arms: &[Arm]) -> Vec<SpannedRange<ConstVal>> {
                     if_let_chain! {[
                         let PatKind::Range(ref lhs, ref rhs) = pat.node,
                         let Ok(lhs) = eval_const_expr_partial(cx.tcx, &lhs, ExprTypeChecked, None),
-                        let Ok(rhs) = eval_const_expr_partial(cx.tcx, &rhs, ExprTypeChecked, None)
+                        let Ok(rhs) = eval_const_expr_partial(cx.tcx, &rhs, ExprTypeChecked, None),
+                        let (Some(lhs), Some(rhs)) = (to_compact_number(&lhs), to_compact_number(&rhs))
                     ], {
                         return Some(SpannedRange { span: pat.span, node: (lhs, rhs) });
                     }}
 
                     if_let_chain! {[
                         let PatKind::Lit(ref value) = pat.node,
-                        let Ok(value) = eval_const_expr_partial(cx.tcx, &value, ExprTypeChecked, None)
+                        let Ok(value) = eval_const_expr_partial(cx.tcx, &value, ExprTypeChecked, None),
+                        let Some(value) = to_compact_number(&value)
                     ], {
                         return Some(SpannedRange { span: pat.span, node: (value.clone(), value) });
                     }}
@@ -379,15 +382,16 @@ enum TypedRanges {
 
 /// Get all `Int` ranges or all `Uint` ranges. Mixed types are an error anyway and other types than
 /// `Uint` and `Int` probably don't make sense.
-fn type_ranges(ranges: &[SpannedRange<ConstVal>]) -> TypedRanges {
+fn type_ranges(ranges: &[SpannedRange<CompactConst>]) -> TypedRanges {
     if ranges.is_empty() {
         TypedRanges::None
     } else {
         match ranges[0].node {
-            (Int(_), Int(_)) => {
+            (CompactConst::Signed(_), CompactConst::Signed(_)) => {
                 TypedRanges::IntRanges(ranges.iter()
                                              .filter_map(|range| {
-                                                 if let (Int(start), Int(end)) = range.node {
+                                                 if let (CompactConst::Signed(start),
+                                                         CompactConst::Signed(end)) = range.node {
                                                      Some(SpannedRange {
                                                          span: range.span,
                                                          node: (start, end),
@@ -398,10 +402,11 @@ fn type_ranges(ranges: &[SpannedRange<ConstVal>]) -> TypedRanges {
                                              })
                                              .collect())
             }
-            (Uint(_), Uint(_)) => {
+            (CompactConst::Unsigned(_), CompactConst::Unsigned(_)) => {
                 TypedRanges::UintRanges(ranges.iter()
                                               .filter_map(|range| {
-                                                  if let (Uint(start), Uint(end)) = range.node {
+                                                  if let (CompactConst::Unsigned(start),
+                                                          CompactConst::Unsigned(end)) = range.node {
                                                       Some(SpannedRange {
                                                           span: range.span,
                                                           node: (start, end),

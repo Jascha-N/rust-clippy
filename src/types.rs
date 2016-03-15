@@ -1,6 +1,6 @@
 use reexport::*;
 use rustc::lint::*;
-use rustc::middle::const_eval;
+use rustc::middle::const_eval::{self, ConstVal};
 use rustc::middle::ty;
 use rustc_front::hir::*;
 use rustc_front::intravisit::{FnKind, Visitor, walk_ty};
@@ -672,7 +672,6 @@ fn detect_absurd_comparison<'a>(cx: &LateContext, op: BinOp_, lhs: &'a Expr, rhs
 fn detect_extreme_expr<'a>(cx: &LateContext, expr: &'a Expr) -> Option<ExtremeExpr<'a>> {
     use rustc::middle::const_eval::EvalHint::ExprTypeChecked;
     use types::ExtremeType::*;
-    use rustc::middle::const_eval::ConstVal::*;
 
     let ty = &cx.tcx.expr_ty(expr).sty;
 
@@ -682,38 +681,50 @@ fn detect_extreme_expr<'a>(cx: &LateContext, expr: &'a Expr) -> Option<ExtremeEx
     };
 
     let cv = match const_eval::eval_const_expr_partial(cx.tcx, expr, ExprTypeChecked, None) {
-        Ok(val) => val,
+        Ok(val) => {
+            if let Some(v) = to_compact_number(&val) {
+                v
+            // separate handling for booleans, to_compact_number doesn't accept bools
+            } else if *ty == ty::TyBool {
+                if let ConstVal::Bool(b) = val {
+                    if b {
+                        return Some(ExtremeExpr { which: Maximum, expr: expr });
+                    } else {
+                        return Some(ExtremeExpr { which: Minimum, expr: expr });
+                    }
+                }
+                return None;
+            } else {
+                return None;
+            }
+        },
         Err(_) => return None,
     };
 
     let which = match (ty, cv) {
-        (&ty::TyBool, Bool(false)) => Minimum,
+        (&ty::TyInt(IntTy::Is), CompactConst::Signed(x)) if x == ::std::isize::MIN as i64 => Minimum,
+        (&ty::TyInt(IntTy::I8), CompactConst::Signed(x)) if x == ::std::i8::MIN as i64 => Minimum,
+        (&ty::TyInt(IntTy::I16), CompactConst::Signed(x)) if x == ::std::i16::MIN as i64 => Minimum,
+        (&ty::TyInt(IntTy::I32), CompactConst::Signed(x)) if x == ::std::i32::MIN as i64 => Minimum,
+        (&ty::TyInt(IntTy::I64), CompactConst::Signed(x)) if x == ::std::i64::MIN as i64 => Minimum,
 
-        (&ty::TyInt(IntTy::Is), Int(x)) if x == ::std::isize::MIN as i64 => Minimum,
-        (&ty::TyInt(IntTy::I8), Int(x)) if x == ::std::i8::MIN as i64 => Minimum,
-        (&ty::TyInt(IntTy::I16), Int(x)) if x == ::std::i16::MIN as i64 => Minimum,
-        (&ty::TyInt(IntTy::I32), Int(x)) if x == ::std::i32::MIN as i64 => Minimum,
-        (&ty::TyInt(IntTy::I64), Int(x)) if x == ::std::i64::MIN as i64 => Minimum,
+        (&ty::TyUint(UintTy::Us), CompactConst::Unsigned(x)) if x == ::std::usize::MIN as u64 => Minimum,
+        (&ty::TyUint(UintTy::U8), CompactConst::Unsigned(x)) if x == ::std::u8::MIN as u64 => Minimum,
+        (&ty::TyUint(UintTy::U16), CompactConst::Unsigned(x)) if x == ::std::u16::MIN as u64 => Minimum,
+        (&ty::TyUint(UintTy::U32), CompactConst::Unsigned(x)) if x == ::std::u32::MIN as u64 => Minimum,
+        (&ty::TyUint(UintTy::U64), CompactConst::Unsigned(x)) if x == ::std::u64::MIN as u64 => Minimum,
 
-        (&ty::TyUint(UintTy::Us), Uint(x)) if x == ::std::usize::MIN as u64 => Minimum,
-        (&ty::TyUint(UintTy::U8), Uint(x)) if x == ::std::u8::MIN as u64 => Minimum,
-        (&ty::TyUint(UintTy::U16), Uint(x)) if x == ::std::u16::MIN as u64 => Minimum,
-        (&ty::TyUint(UintTy::U32), Uint(x)) if x == ::std::u32::MIN as u64 => Minimum,
-        (&ty::TyUint(UintTy::U64), Uint(x)) if x == ::std::u64::MIN as u64 => Minimum,
+        (&ty::TyInt(IntTy::Is), CompactConst::Signed(x)) if x == ::std::isize::MAX as i64 => Maximum,
+        (&ty::TyInt(IntTy::I8), CompactConst::Signed(x)) if x == ::std::i8::MAX as i64 => Maximum,
+        (&ty::TyInt(IntTy::I16), CompactConst::Signed(x)) if x == ::std::i16::MAX as i64 => Maximum,
+        (&ty::TyInt(IntTy::I32), CompactConst::Signed(x)) if x == ::std::i32::MAX as i64 => Maximum,
+        (&ty::TyInt(IntTy::I64), CompactConst::Signed(x)) if x == ::std::i64::MAX as i64 => Maximum,
 
-        (&ty::TyBool, Bool(true)) => Maximum,
-
-        (&ty::TyInt(IntTy::Is), Int(x)) if x == ::std::isize::MAX as i64 => Maximum,
-        (&ty::TyInt(IntTy::I8), Int(x)) if x == ::std::i8::MAX as i64 => Maximum,
-        (&ty::TyInt(IntTy::I16), Int(x)) if x == ::std::i16::MAX as i64 => Maximum,
-        (&ty::TyInt(IntTy::I32), Int(x)) if x == ::std::i32::MAX as i64 => Maximum,
-        (&ty::TyInt(IntTy::I64), Int(x)) if x == ::std::i64::MAX as i64 => Maximum,
-
-        (&ty::TyUint(UintTy::Us), Uint(x)) if x == ::std::usize::MAX as u64 => Maximum,
-        (&ty::TyUint(UintTy::U8), Uint(x)) if x == ::std::u8::MAX as u64 => Maximum,
-        (&ty::TyUint(UintTy::U16), Uint(x)) if x == ::std::u16::MAX as u64 => Maximum,
-        (&ty::TyUint(UintTy::U32), Uint(x)) if x == ::std::u32::MAX as u64 => Maximum,
-        (&ty::TyUint(UintTy::U64), Uint(x)) if x == ::std::u64::MAX as u64 => Maximum,
+        (&ty::TyUint(UintTy::Us), CompactConst::Unsigned(x)) if x == ::std::usize::MAX as u64 => Maximum,
+        (&ty::TyUint(UintTy::U8), CompactConst::Unsigned(x)) if x == ::std::u8::MAX as u64 => Maximum,
+        (&ty::TyUint(UintTy::U16), CompactConst::Unsigned(x)) if x == ::std::u16::MAX as u64 => Maximum,
+        (&ty::TyUint(UintTy::U32), CompactConst::Unsigned(x)) if x == ::std::u32::MAX as u64 => Maximum,
+        (&ty::TyUint(UintTy::U64), CompactConst::Unsigned(x)) if x == ::std::u64::MAX as u64 => Maximum,
 
         _ => return None,
     };

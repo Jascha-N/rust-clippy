@@ -2,7 +2,7 @@ use reexport::*;
 use rustc::front::map::Node::NodeBlock;
 use rustc::lint::*;
 use rustc::middle::const_eval::EvalHint::ExprTypeChecked;
-use rustc::middle::const_eval::{ConstVal, eval_const_expr_partial};
+use rustc::middle::const_eval::eval_const_expr_partial;
 use rustc::middle::def::Def;
 use rustc::middle::region::CodeExtent;
 use rustc::middle::ty;
@@ -14,9 +14,9 @@ use syntax::ast;
 
 use utils::{snippet, span_lint, get_parent_expr, match_trait_method, match_type, in_external_macro,
             span_help_and_lint, is_integer_literal, get_enclosing_block, span_lint_and_then,
-            unsugar_range, walk_ptrs_ty};
+            to_compact_number, unsugar_range, walk_ptrs_ty};
 use utils::{BTREEMAP_PATH, HASHMAP_PATH, LL_PATH, OPTION_PATH, RESULT_PATH, VEC_PATH};
-use utils::UnsugaredRange;
+use utils::{CompactConst, UnsugaredRange};
 
 /// **What it does:** This lint checks for looping over the range of `0..len` of some collection just to get the values by index.
 ///
@@ -428,11 +428,11 @@ fn check_for_loop_reverse_range(cx: &LateContext, arg: &Expr, expr: &Expr) {
                 // this loop will never run. This is often confusing for developers
                 // who think that this will iterate from the larger value to the
                 // smaller value.
-                let (sup, eq) = match (start_idx, end_idx) {
-                    (ConstVal::Int(start_idx), ConstVal::Int(end_idx)) => {
+                let (sup, eq) = match (to_compact_number(&start_idx), to_compact_number(&end_idx)) {
+                    (Some(CompactConst::Signed(start_idx)), Some(CompactConst::Signed(end_idx))) => {
                         (start_idx > end_idx, start_idx == end_idx)
                     }
-                    (ConstVal::Uint(start_idx), ConstVal::Uint(end_idx)) => {
+                    (Some(CompactConst::Unsigned(start_idx)), Some(CompactConst::Unsigned(end_idx))) => {
                         (start_idx > end_idx, start_idx == end_idx)
                     }
                     _ => (false, false),

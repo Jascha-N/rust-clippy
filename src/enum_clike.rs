@@ -4,9 +4,9 @@ use rustc::lint::*;
 use syntax::ast::{IntTy, UintTy};
 use syntax::attr::*;
 use rustc_front::hir::*;
-use rustc::middle::const_eval::{ConstVal, EvalHint, eval_const_expr_partial};
+use rustc::middle::const_eval::{EvalHint, eval_const_expr_partial};
 use rustc::middle::ty;
-use utils::span_lint;
+use utils::{CompactConst, span_lint, to_compact_number};
 
 /// **What it does:** Lints on C-like enums that are `repr(isize/usize)` and have values that don't fit into an `i32`.
 ///
@@ -35,19 +35,22 @@ impl LateLintPass for EnumClikeUnportableVariant {
             for var in &def.variants {
                 let variant = &var.node;
                 if let Some(ref disr) = variant.disr_expr {
-                    let cv = eval_const_expr_partial(cx.tcx, &**disr, EvalHint::ExprTypeChecked, None);
-                    let bad = match (cv, &cx.tcx.expr_ty(&**disr).sty) {
-                        (Ok(ConstVal::Int(i)), &ty::TyInt(IntTy::Is)) => i as i32 as i64 != i,
-                        (Ok(ConstVal::Uint(i)), &ty::TyInt(IntTy::Is)) => i as i32 as u64 != i,
-                        (Ok(ConstVal::Int(i)), &ty::TyUint(UintTy::Us)) => (i < 0) || (i as u32 as i64 != i),
-                        (Ok(ConstVal::Uint(i)), &ty::TyUint(UintTy::Us)) => i as u32 as u64 != i,
-                        _ => false,
-                    };
-                    if bad {
-                        span_lint(cx,
-                                  ENUM_CLIKE_UNPORTABLE_VARIANT,
-                                  var.span,
-                                  "Clike enum variant discriminant is not portable to 32-bit targets");
+                    if let Ok(inner) = eval_const_expr_partial(cx.tcx, &**disr,
+                                                            EvalHint::ExprTypeChecked, None) {
+                        let cv = to_compact_number(&inner);
+                        let bad = match (cv, &cx.tcx.expr_ty(&**disr).sty) {
+                            (Some(CompactConst::Signed(i)), &ty::TyInt(IntTy::Is)) => i as i32 as i64 != i,
+                            (Some(CompactConst::Unsigned(i)), &ty::TyInt(IntTy::Is)) => i as i32 as u64 != i,
+                            (Some(CompactConst::Signed(i)), &ty::TyUint(UintTy::Us)) => (i < 0) || (i as u32 as i64 != i),
+                            (Some(CompactConst::Unsigned(i)), &ty::TyUint(UintTy::Us)) => i as u32 as u64 != i,
+                            _ => false,
+                        };
+                        if bad {
+                            span_lint(cx,
+                                      ENUM_CLIKE_UNPORTABLE_VARIANT,
+                                      var.span,
+                                      "Clike enum variant discriminant is not portable to 32-bit targets");
+                        }
                     }
                 }
             }

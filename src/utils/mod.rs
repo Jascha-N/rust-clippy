@@ -5,6 +5,8 @@ use rustc::middle::def_id::DefId;
 use rustc::middle::{cstore, def, infer, ty, traits};
 use rustc::session::Session;
 use rustc_front::hir::*;
+use rustc::middle::const_eval::ConstVal;
+use rustc_const_eval::{ConstUsize, ConstIsize, ConstInt};
 use std::borrow::Cow;
 use std::mem;
 use std::ops::{Deref, DerefMut};
@@ -755,4 +757,31 @@ pub fn return_ty(fun: ty::Ty) -> Option<ty::Ty> {
 pub fn same_tys<'a, 'tcx>(cx: &LateContext<'a, 'tcx>, a: ty::Ty<'tcx>, b: ty::Ty<'tcx>) -> bool {
     let infcx = infer::new_infer_ctxt(cx.tcx, &cx.tcx.tables, None);
     infcx.can_equate(&cx.tcx.erase_regions(&a), &cx.tcx.erase_regions(&b)).is_ok()
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum CompactConst {
+    Signed(i64),
+    Unsigned(u64),
+}
+
+/// converts an integral ConstVal into a CompactConst
+pub fn to_compact_number(cons: &ConstVal) -> Option<CompactConst> {
+    match *cons {
+        ConstVal::Integral(ConstInt::Isize(ConstIsize::Is32(i))) => Some(CompactConst::Signed(i as i64)),
+        ConstVal::Integral(ConstInt::Isize(ConstIsize::Is64(i))) => Some(CompactConst::Signed(i as i64)),
+        ConstVal::Integral(ConstInt::I8(i)) => Some(CompactConst::Signed(i as i64)),
+        ConstVal::Integral(ConstInt::I16(i)) => Some(CompactConst::Signed(i as i64)),
+        ConstVal::Integral(ConstInt::I32(i)) => Some(CompactConst::Signed(i as i64)),
+        ConstVal::Integral(ConstInt::I64(i)) => Some(CompactConst::Signed(i as i64)),
+        ConstVal::Integral(ConstInt::InferSigned(i)) => Some(CompactConst::Signed(i as i64)),
+        ConstVal::Integral(ConstInt::Usize(ConstUsize::Us32(u))) => Some(CompactConst::Unsigned(u as u64)),
+        ConstVal::Integral(ConstInt::Usize(ConstUsize::Us64(u))) => Some(CompactConst::Unsigned(u as u64)),
+        ConstVal::Integral(ConstInt::U8(u)) => Some(CompactConst::Unsigned(u as u64)),
+        ConstVal::Integral(ConstInt::U16(u)) => Some(CompactConst::Unsigned(u as u64)),
+        ConstVal::Integral(ConstInt::U32(u)) => Some(CompactConst::Unsigned(u as u64)),
+        ConstVal::Integral(ConstInt::U64(u)) => Some(CompactConst::Unsigned(u as u64)),
+        ConstVal::Integral(ConstInt::Infer(u)) => Some(CompactConst::Unsigned(u as u64)),
+        _ => None,
+    }
 }

@@ -1,10 +1,10 @@
 use rustc::lint::*;
 use rustc::middle::const_eval::EvalHint::ExprTypeChecked;
-use rustc::middle::const_eval::{eval_const_expr_partial, ConstVal};
+use rustc::middle::const_eval::eval_const_expr_partial;
 use rustc::middle::ty::TyArray;
 use rustc_front::hir::*;
 use syntax::ast::RangeLimits;
-use utils;
+use utils::{self, CompactConst};
 
 /// **What it does:** Check for out of bounds array indexing with a constant index.
 ///
@@ -66,20 +66,21 @@ impl LateLintPass for ArrayIndexing {
 
                 // Index is a constant uint
                 let const_index = eval_const_expr_partial(cx.tcx, &index, ExprTypeChecked, None);
-                if let Ok(ConstVal::Uint(const_index)) = const_index {
-                    if size <= const_index {
-                        utils::span_lint(cx, OUT_OF_BOUNDS_INDEXING, e.span, "const index is out of bounds");
+                if let Ok(const_index) = const_index {
+                    if let Some(CompactConst::Unsigned(const_index)) = utils::to_compact_number(&const_index) {
+                        if size <= const_index {
+                            utils::span_lint(cx, OUT_OF_BOUNDS_INDEXING, e.span, "const index is out of bounds");
+                        }
+                        return;
                     }
-
-                    return;
                 }
 
                 // Index is a constant range
                 if let Some(range) = utils::unsugar_range(index) {
                     let start = range.start.map(|start|
-                        eval_const_expr_partial(cx.tcx, start, ExprTypeChecked, None)).map(|v| v.ok());
+                        eval_const_expr_partial(cx.tcx, start, ExprTypeChecked, None)).map(|v| v.ok().map(|v| utils::to_compact_number(&v)));
                     let end = range.end.map(|end|
-                        eval_const_expr_partial(cx.tcx, end, ExprTypeChecked, None)).map(|v| v.ok());
+                        eval_const_expr_partial(cx.tcx, end, ExprTypeChecked, None)).map(|v| v.ok().map(|v| utils::to_compact_number(&v)));
 
                     if let Some((start, end)) = to_const_range(start, end, range.limits, size) {
                         if start >= size || end >= size {
@@ -112,19 +113,19 @@ impl LateLintPass for ArrayIndexing {
 ///
 /// Note: we assume the start and the end of the range are unsigned, since array slicing
 /// works only on usize
-fn to_const_range(start: Option<Option<ConstVal>>,
-                    end: Option<Option<ConstVal>>,
+fn to_const_range(start: Option<Option<Option<CompactConst>>>,
+                    end: Option<Option<Option<CompactConst>>>,
                     limits: RangeLimits,
                     array_size: u64)
                     -> Option<(u64, u64)> {
     let start = match start {
-        Some(Some(ConstVal::Uint(x))) => x,
+        Some(Some(Some(CompactConst::Unsigned(x)))) => x,
         Some(_) => return None,
         None => 0,
     };
 
     let end = match end {
-        Some(Some(ConstVal::Uint(x))) => {
+        Some(Some(Some(CompactConst::Unsigned(x)))) => {
             if limits == RangeLimits::Closed {
                 x
             } else {
